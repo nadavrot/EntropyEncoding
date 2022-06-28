@@ -1,0 +1,41 @@
+digraph G {
+  rankdir = BT;
+
+  node [
+    fontname="Helvetica,Arial,sans-serif"
+    shape=Mrecord
+    style=filled
+    fillcolor=gray95
+  ]
+
+  Input;
+  Histogram->Input;
+  NormalizedHistogram->Histogram;
+  SymbolTransformTable -> NormalizedHistogram
+  StateToSymbol -> NormalizedHistogram
+  RangesList -> NormalizedHistogram
+  CodingTable -> RangesList;
+  CodingTable ->  StateToSymbol;
+
+  DecodeTable ->  StateToSymbol;
+  DecodeTable ->  NormalizedHistogram;
+
+  Encoder ->  CodingTable;
+  Encoder ->  SymbolTransformTable;
+
+  Decoder -> DecodeTable;
+
+  Histogram [label="Histogram\n[#symbols]"]
+  NormalizedHistogram [label="Normalized Histogram\n[#symbols]"]
+  RangesList [label="Ranges List \n [table_size]"]
+
+  SymbolTransformTable [label="Symbol Transform\n[#symbols]"];
+  StateToSymbol [label="Sym To State\n[table_size]"];
+  CodingTable [label="Coding Table\n[table_size]"];
+  DecodeTable [label="Decode Table\n[table_size]"];
+
+  Decoder [fillcolor=royalblue];
+  Encoder [fillcolor=salmon];
+  Input [fillcolor=gold];
+}
+
