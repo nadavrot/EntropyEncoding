@@ -37,28 +37,24 @@ impl<const ALPHABET: usize, const TABLESIZE: usize>
         self.create_tables(norm_hist, &state_list);
     }
 
-    /// Spread the symbols using Yann's method. Maps state index to symbol.
-    /// Reference: FSE_buildCTable_wksp
-    /// Visualized in the picture here:
-    /// http://fastcompression.blogspot.com/2014/02/fse-distributing-symbol-values.html
+    /// Spread the symbols using Yann's method, which is to randomly place the
+    /// symbols around the array, minimizing the distance between symbols
+    /// (not grouping them together).
     fn spread_symbols(&self, sym_occurences: &[u32]) -> Vec<u8> {
         let mut state_table: Vec<u8> = vec![0; TABLESIZE];
-        let high_thresh: u32 = (TABLESIZE) as u32;
-        let table_mask: u32 = (TABLESIZE - 1) as u32;
-        let step: u32 = ((TABLESIZE >> 1) + (TABLESIZE >> 3) + 3) as u32;
-        let mut pos: u32 = 0;
+        // This is a large prime number.
+        let step = 7919;
+        let mut pos: usize = 0;
 
-        /* Spread symbols */
         for (sym, occ) in sym_occurences.iter().enumerate() {
             for _i in 0..*occ {
-                state_table[pos as usize] = sym as u8;
-                pos = (pos + step) & table_mask;
-                while pos > high_thresh {
-                    pos = (pos + step) & table_mask
-                }
+                state_table[pos % TABLESIZE] = sym as u8;
+                pos += step;
             }
         }
-        assert!(pos == 0);
+        // The lowest common denominator of the table at the prime is 1,
+        // so we know that the cycle size will be the size of the table.
+        assert!(pos % TABLESIZE == 0);
         state_table
     }
 

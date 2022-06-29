@@ -99,7 +99,7 @@ impl FSE {
         cumulative
     }
 
-    /// Generate the state table.
+    /// Generate the state_table (spread the numbers semi-randomly).
     /// Reference: FSE_buildCTable_wksp
     /// Visualized in the picture here:
     /// http://fastcompression.blogspot.com/2014/02/fse-distributing-symbol-values.html
@@ -111,6 +111,10 @@ impl FSE {
         let table_size = self.get_table_size() as u32;
         let high_thresh = table_size - 1;
         let table_mask = table_size - 1;
+        // This kind of looks like a prime number, so the LCD of the table size
+        // and the step is 1, so we know that the cycle will be equal to the
+        // table size and we won't step on the same element twice.
+        // This gives the effect of shuffling the elements around.
         let step = (table_size >> 1) + (table_size >> 3) + 3;
         let mut pos: u32 = 0;
 
