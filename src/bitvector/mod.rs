@@ -1,6 +1,7 @@
+
 pub struct Bitvector {
     /// Stores the payload of the bitvector.
-    /// The bits are always packed to the left [012345xxxxxx][xxxxxxx][xxxxxx]
+    /// The bits are always packed to the right [xxxxx012345][xxxxxxx]    
     data: Vec<u64>,
     // Points to the next free bit (also size of bitvector).
     len: usize,
@@ -9,7 +10,6 @@ pub struct Bitvector {
 impl Bitvector {
     pub fn new() -> Bitvector {
         Bitvector {
-            // Init with at least one value to overcome edge case in 'push'.
             data: vec![0],
             len: 0,
         }
@@ -20,95 +20,99 @@ impl Bitvector {
         self.data = vec![0];
     }
 
-    pub fn push(&mut self, bit: bool) {
-        if self.len >= self.data.len() * 64 {
-            self.data.push(0);
-        }
-
-        let last = self.data.last_mut().unwrap();
-        let shift = self.len % 64;
-        let mask = (bit as u64) << (63 - shift);
-        *last |= mask;
-        self.len += 1;
-    }
-
     // Set all of the bits above \p keep to zero.
     fn clear_upper_bits(bits: u64, keep: usize) -> u64 {
-        if keep >= 64 {
-            return bits;
-        }
-        let shl = bits << (64 - keep);
-        shl >> (64 - keep)
+        let amt: u32 = (64 - keep) as u32;
+        let shl = bits.checked_shl(amt).unwrap_or(0);
+        shl.checked_shr(amt).unwrap_or(0)
     }
 
-    /// Store \p len bits from \p bits.     
-    pub fn push_word(&mut self, bits: u64, len: usize) {
-        if self.len >= self.data.len() * 64 {
-            self.data.push(0);
-        }
+    fn capacity(&self) -> usize {
+        self.data.len() * 64
+    }
 
-        assert!(len > 0);
+    /// Ensure that the bit vector can hold at least \p num_bits bits.
+    fn grow(&mut self, num_bits: usize) {
+        let mut capacity = self.capacity();
+        while capacity <= num_bits {
+            self.data.push(0);
+            capacity += 64;
+        }
+    }
+
+    /// Push the lowest \p len bits from \p bits.
+    pub fn push_word(&mut self, bits: u64, len: usize) {
+        assert!(len > 0 && len <= 64);
         let bits = Self::clear_upper_bits(bits, len);
 
-        assert!(len <= 64, "Saving too many bits");
-        let capacity = self.data.len() * 64;
-        assert!(capacity >= self.len, "invalid capacity");
+        self.grow(self.len() + len);
+        let capacity = self.capacity();
         let avail = capacity - self.len;
 
-        let last = self.data.last_mut().unwrap();
+        let curr_len = self.len();
+        let avail_last_word = (avail - 1) % 64 + 1;
+
+        let last_word_idx = curr_len / 64;
+        let last = self.data.get_mut(last_word_idx).unwrap();
 
         // If we can fit the current request in the last word.
-        if avail >= len {
-            //assert!(bits >> len == 0, "upper bits must be zero");
-            let shift = avail - len;
-            *last |= bits << shift;
+        if avail_last_word >= len {
+            assert!(len == 64 || bits >> len == 0, "upper bits must be zero");
+            *last = last.checked_shl(len as u32).unwrap_or(0);            
+            *last |= bits;
             self.len += len;
             return;
         }
 
         // Fill the current word:
-        let first_bits = bits >> (len - avail);
+        let shift = avail_last_word;
+        let first_bits = bits >> (len - shift);
+        *last <<= shift;
         *last |= first_bits;
 
         // Add a new word that contains the lower bits.
-        self.data.push(bits << (64 - (len - avail)));
+        self.data[last_word_idx + 1] =
+            Self::clear_upper_bits(bits, len - shift);
         self.len += len;
     }
 
-    pub fn nth(&self, n: usize) -> bool {
-        assert!(n < self.len, "Invalid bit");
-        let word = self.data.get(n / 64).unwrap();
-        let shift = 63 - (n % 64);
-        ((word >> shift) & 0x1) != 0
-    }
-
-    pub fn read_nth_bits(&self, n: usize, bits: usize) -> u64 {
-        // This is the layout of the two consecutive words. We need to read
-        // a window that may straddle both words.
-        //[01234567...][abcdef....]
-        //    ^...........^
+    /// Remove \p len bits from \p bits.
+    pub fn pop_word(&mut self, num_bits: usize) -> u64 {
+        // This is the layout of the two consecutive words. We need to read a
+        // window that may straddle both words.
+        //[012345|6789ABCDEF][xxxxx|abcdef] ...
+        //    ^.......................^
         //
-        assert!(n + bits <= self.len, "Invalid bit");
-        let first_bit_idx = n % 64;
-        let avail_bits = 64 - first_bit_idx;
+        assert!(self.len >= num_bits, "popping too many bits");
+        let avail_in_last_word = (self.len - 1) % 64 + 1;
 
-        // If we can read everything from the current word then return it.
-        if avail_bits >= bits {
-            let first_word = self.data.get(n / 64).unwrap();
-            let first_bit = n % 64;
-            let shifted = *first_word >> (64 - (first_bit + bits));
-            return Self::clear_upper_bits(shifted, bits);
+        let offset = self.len - num_bits;
+        let first_word_idx = offset / 64;
+
+        // Read all of the bits from the last word:
+        if avail_in_last_word >= num_bits {
+            let word = self.data.get_mut(first_word_idx).unwrap();
+            let val = *word;
+            *word = word.checked_shr(num_bits as u32).unwrap_or(0);
+            self.len -= num_bits;
+            return Self::clear_upper_bits(val, num_bits);
         }
 
-        // Copy the bits from the current word.
+        // Handle the case where the return value is split between two words.
+        let first_word = self.data.get(first_word_idx).unwrap();
+        let next_word = self.data.get(first_word_idx + 1).unwrap();
 
-        let first_word = self.data.get(n / 64).unwrap();
-        let next_word = self.data.get((n / 64) + 1).unwrap();
+        let bits_from_second_word = self.len % 64;
+        let bits_from_first_word = num_bits - bits_from_second_word;
+        let low = Self::clear_upper_bits(*next_word, bits_from_second_word);
+        let high = first_word << bits_from_second_word;
+        let res = low | high;
 
-        let a = first_word << first_bit_idx;
-        let b = next_word >> avail_bits;
-        let c = a | b;
-        c >> (64 - bits)
+        // Zero out the area that we read.
+        self.data[first_word_idx] >>= bits_from_first_word;
+        self.data[first_word_idx + 1] = 0;
+        self.len -= num_bits;
+        Self::clear_upper_bits(res, num_bits)
     }
 
     pub fn len(&self) -> usize {
@@ -116,18 +120,9 @@ impl Bitvector {
     }
 
     pub fn dump(&self) {
-        print!("[");
-        for i in 0..self.len {
-            print!("{}", self.nth(i) as usize);
-            if i % 32 == 31 {
-                print!("\n.");
-            }
-        }
-        println!("]");
-
         print!("{{");
         for elem in self.data.iter() {
-            print!("{:08x}, ", elem);
+            print!("{:b}, ", elem);
         }
         println!("}}");
     }
@@ -144,112 +139,59 @@ fn test_clear_upper() {
 #[test]
 fn test_bitvector_simple() {
     let mut bv = Bitvector::new();
-    // Check that the size of the bitvector changes as we insert values.
+
     assert_eq!(bv.len(), 0);
-    bv.push(true);
-    assert_eq!(bv.len(), 1);
-    bv.push(false);
-    assert_eq!(bv.len(), 2);
-    assert_eq!(bv.nth(0), true);
-    assert_eq!(bv.nth(1), false);
+    bv.push_word(0b1101, 4);
+    assert_eq!(bv.len(), 4);
+    assert_eq!(bv.pop_word(1), 1);
+    assert_eq!(bv.pop_word(1), 0);
+    assert_eq!(bv.pop_word(1), 1);
+    assert_eq!(bv.pop_word(1), 1);
+    assert_eq!(bv.len(), 0);
+
+    bv.push_word(0xffaa, 16);
+    let lower = bv.pop_word(8);
+    let upper = bv.pop_word(8);
+    assert_eq!(lower, 0xaa);
+    assert_eq!(upper, 0xff);
 }
 
 #[test]
-fn test_bitvector_push0() {
+fn test_pop() {
     let mut bv = Bitvector::new();
-
-    // Test vector 0
-    bv.push_word(0x0, 32);
-    bv.push_word(0xff, 8);
-    let v2 = bv.read_nth_bits(32, 8);
-    assert_eq!(v2, 255);
-    bv.clear();
-
-    // Test vector 1
-    bv.push_word(0xff, 8);
-    let v2 = bv.read_nth_bits(0, 8);
-    assert_eq!(v2, 255);
-    bv.clear();
-
-    // Test vector 2
-    bv.push_word(0x0, 2);
-    let val = Bitvector::clear_upper_bits(0xffffffffffffffff, 63);
-    bv.push_word(val, 63);
-    let v2 = bv.read_nth_bits(2, 63);
-    assert_eq!(val, v2);
-
-    // Test vector 3
-    bv.push_word(0x0, 62);
-    let idx = bv.len();
-    let val = Bitvector::clear_upper_bits(0x1037, 10);
-    bv.push_word(val, 10);
-    let v2 = bv.read_nth_bits(idx, 10);
-    assert_eq!(val, v2);
-
-    // Test a bunch of different sizes and offsets.
-    for size in 1..64 {
-        for offset in 1..64 {
-            bv.push_word(0x0, offset);
-            let idx = bv.len();
-            let val = Bitvector::clear_upper_bits(0xffffffffff1f4f0f, size);
-            bv.push_word(val, size);
-            let v2 = bv.read_nth_bits(idx, size);
-            assert_eq!(val, v2);
-        }
+    // Push and pop a few pairs.
+    for i in 0..1000 {
+        bv.push_word(i % 3, 1);
+        let val = (i * 713) as u64;
+        // Push a full word.
+        bv.push_word(val, 64);
+        let val2 = bv.pop_word(64);
+        assert_eq!(val, val2);
     }
-}
-
-#[test]
-fn test_bitvector_push1() {
-    fn pack_bits(bits: &[u8]) -> u64 {
-        let mut ret: u64 = 0;
-        for elem in bits.iter() {
-            ret <<= 1;
-            if *elem != 0 {
-                ret += 1;
-            }
-        }
-        ret
-    }
-
-    let mut bv = Bitvector::new();
-
-    let bits = pack_bits(&[0, 1, 1]);
-    bv.push_word(bits, 3);
-    assert_eq!(bv.read_nth_bits(0, 3), bits);
     bv.dump();
-    assert_eq!(bv.len(), 3);
-    assert_eq!(bv.nth(0), false);
-    assert_eq!(bv.nth(1), true);
-    assert_eq!(bv.nth(2), true);
-
-    bv.push_word(0x0, 64);
-    assert_eq!(bv.nth(64 + 0), false);
-    assert_eq!(bv.nth(64 + 1), false);
-    assert_eq!(bv.nth(64 + 2), false);
-
-    bv.push_word(0x1, 1);
-    assert_eq!(bv.nth(64 + 3), true);
-    bv.dump();
-
-    // Push a bunch of values.
-    for _ in 0..10 {
-        for word_size in 1..64 {
-            let val = 0x1412 * word_size as u64;
-            let val = Bitvector::clear_upper_bits(val, word_size);
-            let idx = bv.len();
-            bv.push_word(val, word_size);
-            let val2 = bv.read_nth_bits(idx, word_size);
-            assert_eq!(val2, val);
-        }
-    }
 }
 
 #[test]
 fn test_bitvector_bug() {
     let mut bv = Bitvector::new();
-    bv.push_word(0b0, 1);
-    bv.push_word(0b0, 1);
-    bv.push_word(0b1, 2);
-    bv.dump();
+
+    let mut counter = 1;
+
+    for i in 1..56 {
+        // Start the check at different offset in the vector.
+        bv.push_word(0x1, i);
+
+        // Outer push.
+        counter = (counter * 7) & 0xffffffff;
+        bv.push_word(counter, 32);
+
+        // Do an inner push and pop to dirty the upper bits.
+        bv.push_word(0xaf, 8);
+        let val = bv.pop_word(8);
+        assert_eq!(0xaf, val);
+
+        // Check the outer value.
+        let popped = bv.pop_word(32);
+        assert_eq!(counter & 0xffffffff, popped);
+    }
 }

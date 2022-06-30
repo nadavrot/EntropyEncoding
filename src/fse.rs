@@ -243,28 +243,24 @@ impl FSE {
     /// Encode one symbol and return the new state.
     /// Reference: FSE_encodeSymbol
     pub fn decode_one_symbols(
-        &self,
-        offset: &mut usize,
+        &mut self,
         state: &mut u32,
         decode_table: &DecodingTable,
     ) -> u8 {
         let sym = decode_table[*state as usize].symbol as u8;
         let nbits = decode_table[*state as usize].num_bits;
-        *offset -= nbits as usize;
-        let rest = self.bitvector.read_nth_bits(*offset, nbits as usize);
+        let rest = self.bitvector.pop_word(nbits as usize); //self.bitvector.read_nth_bits(*offset, nbits as usize);
         *state = decode_table[*state as usize].new_state + rest as u32;
         sym
     }
 
-    pub fn decode_data(&self, decode_table: &DecodingTable) -> Vec<u8> {
+    pub fn decode_data(&mut self, decode_table: &DecodingTable) -> Vec<u8> {
         let mut output = Vec::new();
-        let mut offset: usize = self.bitvector.len() - self.table_log;
-        let mut state =
-            self.bitvector.read_nth_bits(offset, self.table_log) as u32;
+        let mut state = self.bitvector.pop_word(self.table_log as usize) as u32;
+        //self.bitvector.read_nth_bits(offset, self.table_log) as u32;
 
-        while offset != 0 {
-            let sym =
-                self.decode_one_symbols(&mut offset, &mut state, decode_table);
+        while self.bitvector.len() != 0 {
+            let sym = self.decode_one_symbols(&mut state, decode_table);
             output.push(sym);
         }
 

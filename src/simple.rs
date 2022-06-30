@@ -146,11 +146,10 @@ impl<const ALPHABET: usize, const TABLESIZE: usize>
         );
     }
 
-    fn decode_one_symbol(&mut self, offset: &mut usize, state: &mut u32) -> u8 {
+    fn decode_one_symbol(&mut self, state: &mut u32) -> u8 {
         // Renormalize the state and bring it to the valid range.
         while TABLESIZE > *state as usize {
-            *offset -= 1;
-            let bit = self.bitvector.read_nth_bits(*offset, 1);
+            let bit = self.bitvector.pop_word(1);
             *state <<= 1;
             *state |= bit as u32;
         }
@@ -165,16 +164,14 @@ impl<const ALPHABET: usize, const TABLESIZE: usize>
     /// Read a string from the bitvector.
     pub fn decode_data(&mut self) -> Vec<u8> {
         let table_log = num_bits(TABLESIZE as u32 - 1) as usize;
-        let mut offset = self.bitvector.len() - table_log;
-        let mut state: u32 = TABLESIZE as u32
-            + self.bitvector.read_nth_bits(offset, table_log) as u32;
+        let mut state: u32 =
+            TABLESIZE as u32 + self.bitvector.pop_word(table_log) as u32;
         let mut res = Vec::new();
-        while offset != 0 {
-            let sym = self.decode_one_symbol(&mut offset, &mut state);
-            if offset != 0 {
-                res.push(sym);
-            }
+        while self.bitvector.len() != 0 {
+            let sym = self.decode_one_symbol(&mut state);
+            res.push(sym);
         }
+        res.pop();
         res
     }
 }
@@ -190,6 +187,7 @@ fn test_round_trip_simple_encoder() {
     enc.from_data(&input);
     // Encode the test.
     enc.encode_data(&input);
+    let len = enc.bitvector.len();
     // Print the compressed binary representation.
     enc.bitvector.dump();
     // Decode the data.
@@ -197,6 +195,6 @@ fn test_round_trip_simple_encoder() {
 
     println!("Decoded {:?}", out);
     println!("Input length = {}", 8 * input.len());
-    println!("Compressed length = {}", enc.bitvector.len());
+    println!("Compressed length = {}", len);
     assert_eq!(out, input);
 }
